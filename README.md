@@ -71,3 +71,7 @@ TODO: time `127.0.0.1 -p 1-1024` at concurrency 1, 50 and 500, and compare again
 - [ ] Benchmarks vs nmap
 - [ ] Stretch: UDP probes for DNS (53) and NTP (123)
 - [ ] Stretch: map banners to known versions and flag outdated ones
+
+## License
+
+MIT, Copyright (c) 2026 AoceanP. See [LICENSE](LICENSE).
