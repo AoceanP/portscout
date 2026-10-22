@@ -66,8 +66,8 @@ public final class Main
 				switch (args[i])
 				{
 					case "-p", "--ports" -> ports = args[++i];
-					case "-t", "--timeout" -> timeout = Integer.parseInt(args[++i]);
-					case "-c", "--concurrency" -> concurrency = Integer.parseInt(args[++i]);
+					case "-t", "--timeout" -> timeout = toNumber(args[i], args[++i]);
+					case "-c", "--concurrency" -> concurrency = toNumber(args[i], args[++i]);
 					case "--json" -> json = true;
 					case "--all" -> all = true;
 					default -> throw new IllegalArgumentException("unknown option " + args[i]);
@@ -105,6 +105,31 @@ public final class Main
 			System.err.println("error: " + e.getMessage());
 			System.err.print(USAGE);
 			System.exit(2);
+		}
+	}
+
+	/**
+	 * WHAT:   Reads the whole-number value of an option such as -t or -c.
+	 * WHY:    Java's own message ("For input string: abc") does not say which
+	 *         option was wrong; this one does.
+	 * PRE:    option and value are not null
+	 * RETURN: the value as an int
+	 * THROWS: IllegalArgumentException if value is not a whole number
+	 *
+	 * @param option the option name, used in the error message, e.g. "-t"
+	 * @param value  the text after the option, e.g. "500"
+	 * @return the number
+	 * @throws IllegalArgumentException if value is not a whole number
+	 */
+	private static int toNumber(String option, String value)
+	{
+		try
+		{
+			return Integer.parseInt(value);
+		}
+		catch (NumberFormatException e)
+		{
+			throw new IllegalArgumentException(option + " needs a whole number, got '" + value + "'");
 		}
 	}
 }
