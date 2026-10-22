@@ -41,7 +41,7 @@ nmap already does this well. portscout exists to understand **how it works under
 | Service identification | `PortProbe.grabBanner` |
 | Firewall behaviour (drop vs refuse) | FILTERED vs CLOSED |
 | Concurrency in Java 21 | `Scanner`: virtual threads capped by a semaphore |
-| Testing and documentation | 28 JUnit tests, Javadoc, UML and flowchart below |
+| Testing and documentation | 42 JUnit tests, Javadoc, UML, flowchart and the edge cases below |
 
 ## Setup
 
@@ -154,3 +154,69 @@ TODO: time `127.0.0.1 -p 1-1024` at concurrency 1, 50 and 500, and compare again
 ## License
 
 MIT, Copyright (c) 2026 AoceanP. See [LICENSE](LICENSE).
+
+## Edge cases
+
+Every case below is covered by a test (in [`EdgeCaseTest`](src/test/java/portscout/EdgeCaseTest.java) unless another class is named) or, for the command line, was checked by hand.
+
+### Ports
+
+| Input | Result | Why |
+|---|---|---|
+| `1`, `65535`, `443-443` | accepted | the lowest and highest TCP ports, and a one-port range, are all valid |
+| `0`, `65536` | refused | port 0 is reserved; ports are 16-bit (`PortParserTest`) |
+| `080` | port 80 | read as decimal, never octal |
+| `-5` | refused | looks like a range with no start, so it must not quietly scan 1 to 5 |
+| `100-50` | refused | a backwards range is a typo (`PortParserTest`) |
+| `80,` `80-` `1-2-3` | refused | typos fail loudly instead of being ignored (`PortParserTest`) |
+| ` 80 , 22,80 ` | `22, 80` | spaces ignored, duplicates removed, sorted (`PortParserTest`) |
+
+### Targets
+
+| Input | Result | Why |
+|---|---|---|
+| `10.0.0.0/16` | 65,534 hosts | the biggest block allowed; `/15` and larger are refused so nobody scans a huge network by accident |
+| `192.168.1.77/24` | same as `192.168.1.0/24` | host bits are masked off (`TargetParserTest`) |
+| `10.0.0.0/31`, `/32` | every address | point-to-point and single-host blocks have no network or broadcast address, RFC 3021 (`TargetParserTest`) |
+| `255.255.255.0/30` | `.1` and `.2` | above 127.255.255.255 a Java `int` is negative, so the math is done unsigned (`TargetParserTest`) |
+| `010.0.0.008` | `10.0.0.8` | some C libraries read `010` as octal 8, a known way to slip past address filters; portscout always reads decimal |
+| `  10.0.0.1  ` | `10.0.0.1` | surrounding spaces from copy and paste are trimmed |
+| `0.0.0.0`, `255.255.255.255` | accepted | valid IPv4 text; what a connect does is up to the operating system |
+| `10.+1.0.1`, `10..0.1`, `256.1.1.1`, `example` | refused | `Integer.parseInt` accepts `+1`, so octets are checked as digits only (`TargetParserTest`) |
+
+### Probes and banners
+
+| Situation | Result | Why |
+|---|---|---|
+| Service greets first (SSH, FTP) | OPEN with banner | read straight away (`PortProbeTest`) |
+| Service waits for a request (HTTP) | OPEN with status line | after one silent read timeout, a `HEAD` request is sent (`PortProbeTest`) |
+| Service accepts and hangs up at once | OPEN, empty banner | the port is open even if nothing is said |
+| Service never answers, even to `HEAD` | OPEN, empty banner, about 2 timeouts | every read has a timeout, so a probe can never hang |
+| Banner over 256 bytes | cut to 256 | a chatty or hostile service cannot flood the report |
+| Banner with control characters | trimmed at the edges, `.` inside | banners are untrusted remote data (`PortProbeTest`) |
+| Banner that is only a line break | empty | whitespace is not a banner |
+| Banner with `"` or `\` | escaped in JSON | a server cannot break or inject into the JSON output (`ReportTest`) |
+| Nothing listening | CLOSED | the host answers the SYN with a RST (`PortProbeTest`) |
+| No reply at all (`192.0.2.1`) | FILTERED | a reserved, never-routed address behaves like a firewall that drops packets (`PortProbeTest`) |
+
+### Scanner and output
+
+| Situation | Result | Why |
+|---|---|---|
+| `-c 1` | runs one probe at a time | fully sequential still finishes |
+| `-c 10000` with 2 ports | 2 results | the cap only limits; it never adds threads |
+| `-c 0` | refused | at least one probe must be allowed to run (`PortProbeTest`) |
+| More than 1,000,000 probes | refused before any socket opens | e.g. a /16 with 16 ports; keeps memory bounded |
+| Hosts `.10`, `.9`, `.1` | sorted `.1`, `.9`, `.10` | sorted as numbers, not text |
+| Empty scan | `0 open of 0 probed` / `[]` | "nothing found" prints cleanly |
+
+### Command line (checked by hand)
+
+| Command | Result |
+|---|---|
+| `portscout` or `portscout -h` | prints usage |
+| `portscout 127.0.0.1 -p` | `error: -p needs a value`, exit code 2 |
+| `portscout 127.0.0.1 -t 0` | `error: timeout and concurrency must be at least 1`, exit code 2 |
+| `portscout 127.0.0.1 -t abc` | `error: -t needs a whole number, got 'abc'`, exit code 2 |
+| `portscout 10.0.0.0/8` | `error: /8 is too big to scan; use /16 or smaller`, exit code 2 |
+| `portscout 127.0.0.1 --bogus` | `error: unknown option --bogus`, exit code 2 |
