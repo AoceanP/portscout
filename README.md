@@ -27,7 +27,7 @@ Doing this by hand is slow and unclear:
 
 - **TCP connect scan** that reads the packet behaviour: a completed handshake is OPEN, a reset (RST) is CLOSED, silence until the timeout is FILTERED. That turns "it failed" into "nothing there" vs "a firewall is dropping it".
 - **Banner grabbing** to identify the service: read the greeting that SSH, FTP and SMTP send, and send an HTTP `HEAD` to services that stay silent.
-- **Java 21 virtual threads, capped by a semaphore,** so probes wait on the network in parallel: 1,024 ports at 200 at a time takes about 1,024 ÷ 200 × 0.5 s ≈ **3 seconds** in the worst case instead of 8 minutes, without exhausting sockets or flooding the target.
+- **Java 21 virtual threads, capped by a semaphore,** so probes wait on the network in parallel: 1,024 ports at 200 at a time takes about 1,024 ÷ 200 × 0.5 s ≈ **3 seconds** in the worst case instead of 8 minutes (measured: 93x faster on a silent host, see [Benchmarks](#benchmarks)), without exhausting sockets or flooding the target.
 - **CIDR parsing** to scan a whole subnet in one command, with safety limits (nothing bigger than a /16, at most 1,000,000 probes).
 
 ### Why I built it
@@ -149,7 +149,32 @@ Both diagrams are drawn in draw.io: [portscout-flow.drawio](docs/portscout-flow.
 
 ## Benchmarks
 
-TODO: time `127.0.0.1 -p 1-1024` at concurrency 1, 50 and 500, and compare against `nmap -sT`.
+Measured on Windows 11 with Java 25, default 500 ms timeout.
+
+### A host that does not answer (worst case)
+
+`192.0.2.1` is a reserved address that never replies, so every probe waits out the full timeout, exactly like a host behind a firewall that drops packets. 100 ports:
+
+| Concurrency (`-c`) | Time | Speed-up |
+|---|---|---|
+| 1 | 50,176 ms | 1x |
+| 10 | 5,043 ms | 10x |
+| 50 | 1,040 ms | 48x |
+| 100 | 538 ms | 93x |
+
+The time follows `ports × timeout ÷ concurrency` almost exactly (100 × 0.5 s ÷ 10 = 5 s), because each probe spends nearly all its time waiting, not computing. Virtual threads make that waiting cheap enough to run hundreds at once.
+
+### Your own machine (best case)
+
+`127.0.0.1`, ports 1 to 1024. Closed ports answer with a reset in about 2 ms, so even one at a time is quick:
+
+| Concurrency (`-c`) | Time |
+|---|---|
+| 1 | 3,831 ms |
+| 50 | 1,053 ms |
+| 500 | 1,050 ms |
+
+Past 50 there is no gain: the scan can never finish faster than its slowest probe, here port 135, which waits about 1 s for a banner that never comes.
 
 ## Roadmap
 
@@ -157,7 +182,8 @@ TODO: time `127.0.0.1 -p 1-1024` at concurrency 1, 50 and 500, and compare again
 - [x] TargetParser (CIDR)
 - [x] PortProbe (connect scan + banners)
 - [x] Scanner (virtual threads + semaphore)
-- [ ] Benchmarks vs nmap
+- [x] Benchmarks
+- [ ] Compare against `nmap -sT`
 - [ ] Stretch: UDP probes for DNS (53) and NTP (123)
 - [ ] Stretch: map banners to known versions and flag outdated ones
 
