@@ -1,6 +1,12 @@
 package portscout;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 
 /**
  * WHAT:   Runs many port probes at the same time.
@@ -11,8 +17,15 @@ import java.util.List;
 public final class Scanner
 {
 	/**
+	 * WHAT:   The most probes one scan may run (hosts times ports).
+	 * WHY:    Every probe keeps a result in memory; this stops a /16 with all
+	 *         65,535 ports (4 billion probes) from exhausting memory.
+	 */
+	static final long MAX_PROBES = 1_000_000;
+
+	/**
 	 * WHAT:   Blocks creating a Scanner.
-	 * WHY:    The class only holds a static helper, so an instance means nothing.
+	 * WHY:    The class only holds static helpers, so an instance means nothing.
 	 */
 	private Scanner()
 	{
@@ -28,25 +41,66 @@ public final class Scanner
 	 * PRE:    timeoutMs is a positive integer
 	 * PRE:    maxConcurrent is a positive integer
 	 * RETURN: one ScanResult per host and port pair, sorted by host, then port
-	 * HOW:    1. Create a Semaphore with maxConcurrent permits.
-	 *         2. In try-with-resources, open
-	 *            Executors.newVirtualThreadPerTaskExecutor() (Java 21).
-	 *         3. For each host and port, submit a task that acquires a permit,
-	 *            calls PortProbe.probe, and releases the permit in finally.
-	 *            Keep every returned Future in a list.
-	 *         4. Leaving the try block waits for every task to finish.
-	 *         5. Collect each Future's result and sort by host, then port.
-	 *            Compare hosts as numbers, not strings, or "10.0.0.10"
-	 *            sorts before "10.0.0.9".
+	 * THROWS: IllegalArgumentException if maxConcurrent is below 1 or the scan
+	 *         would need more than MAX_PROBES probes
 	 *
 	 * @param hosts         the IPv4 addresses to scan
 	 * @param ports         the TCP ports to probe on every host
 	 * @param timeoutMs     connect and read timeout per probe, in milliseconds
 	 * @param maxConcurrent the most probes allowed to run at the same time
 	 * @return every result, sorted by host, then port
+	 * @throws IllegalArgumentException if maxConcurrent is below 1 or the scan is too big
 	 */
 	public static List<ScanResult> scan(List<String> hosts, List<Integer> ports, int timeoutMs, int maxConcurrent)
 	{
-		throw new UnsupportedOperationException("TODO: implement Scanner.scan");
+		if (maxConcurrent < 1)
+		{
+			throw new IllegalArgumentException("concurrency must be at least 1");
+		}
+		long total = (long) hosts.size() * ports.size();
+		if (total > MAX_PROBES)
+		{
+			throw new IllegalArgumentException(total + " probes is too many; the limit is " + MAX_PROBES
+				+ ". Use a smaller subnet or fewer ports.");
+		}
+
+		Semaphore permits = new Semaphore(maxConcurrent);
+		List<Future<ScanResult>> futures = new ArrayList<>((int) total);
+
+		// closing the executor (end of the try block) waits for every task
+		try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor())
+		{
+			for (String host : hosts)
+			{
+				for (int port : ports)
+				{
+					// take the permit before starting the thread, so at most
+					// maxConcurrent probe threads exist at any moment
+					permits.acquireUninterruptibly();
+					futures.add(executor.submit(() -> {
+						try
+						{
+							return PortProbe.probe(host, port, timeoutMs);
+						}
+						finally
+						{
+							permits.release();
+						}
+					}));
+				}
+			}
+		}
+
+		List<ScanResult> results = new ArrayList<>(futures.size());
+		for (Future<ScanResult> future : futures)
+		{
+			results.add(future.resultNow());
+		}
+
+		// threads finish in any order; compare hosts as numbers so .9 comes before .10
+		results.sort(Comparator
+			.comparingLong((ScanResult r) -> Integer.toUnsignedLong(TargetParser.toInt(r.host())))
+			.thenComparingInt(ScanResult::port));
+		return results;
 	}
 }
