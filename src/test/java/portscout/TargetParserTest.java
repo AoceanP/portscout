@@ -93,4 +93,29 @@ class TargetParserTest
 		assertThrows(IllegalArgumentException.class, () -> TargetParser.parse("10.0.0.0/8"));
 		assertThrows(IllegalArgumentException.class, () -> TargetParser.parse("example"));
 	}
+
+	/**
+	 * WHAT:   Addresses at the top of the IPv4 space.
+	 * WHY:    Above 127.255.255.255 a Java int is negative, so the math must
+	 *         stay unsigned or the loop would run backwards.
+	 */
+	@Test
+	void highAddresses()
+	{
+		List<String> hosts = TargetParser.parse("255.255.255.0/30");
+		assertEquals(List.of("255.255.255.1", "255.255.255.2"), hosts);
+	}
+
+	/**
+	 * WHAT:   Octets with a sign, a space, or a missing number.
+	 * WHY:    Integer.parseInt accepts "+1", so the parser must check digits itself.
+	 */
+	@Test
+	void rejectsSneakyOctets()
+	{
+		assertThrows(IllegalArgumentException.class, () -> TargetParser.parse("10.+1.0.1"));
+		assertThrows(IllegalArgumentException.class, () -> TargetParser.parse("10. 1.0.1"));
+		assertThrows(IllegalArgumentException.class, () -> TargetParser.parse("10..0.1"));
+		assertThrows(IllegalArgumentException.class, () -> TargetParser.parse("10.0.0.1/24/8"));
+	}
 }
