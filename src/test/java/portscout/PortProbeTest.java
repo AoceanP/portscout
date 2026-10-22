@@ -1,6 +1,8 @@
 package portscout;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -76,9 +78,8 @@ class PortProbeTest
 		{
 			port = server.getLocalPort();
 		}
-		// nothing listens there now, so localhost answers with a RST.
-		// Windows retries a refused SYN for about 2 s before giving up, hence the long timeout.
-		assertEquals(ScanResult.State.CLOSED, PortProbe.probe("127.0.0.1", port, 3000).state());
+		// nothing listens there now, so localhost answers with a RST
+		assertEquals(ScanResult.State.CLOSED, PortProbe.probe("127.0.0.1", port, 1000).state());
 	}
 
 	/**
@@ -98,6 +99,78 @@ class PortProbeTest
 			assertEquals(Math.min(a.getLocalPort(), b.getLocalPort()), results.get(0).port());
 			results.forEach(r -> assertEquals(ScanResult.State.OPEN, r.state()));
 		}
+	}
+
+	/**
+	 * WHAT:   A banner with control characters and a second line.
+	 * WHY:    Banners are untrusted remote data; only the first line of
+	 *         printable text may reach the report. Control characters at the
+	 *         edges are trimmed away, ones inside become '.'.
+	 *
+	 * @throws Exception if the local test server cannot be started
+	 */
+	@Test
+	void bannerIsCleaned() throws Exception
+	{
+		try (ServerSocket server = new ServerSocket(0))
+		{
+			serveOnce(server, "\u0007220 FTP\u001b ready\r\nsecond line\r\n");
+			ScanResult r = PortProbe.probe("127.0.0.1", server.getLocalPort(), 1000);
+			assertEquals("220 FTP. ready", r.banner());
+		}
+	}
+
+	/**
+	 * WHAT:   An address that never answers.
+	 * WHY:    192.0.2.1 is TEST-NET-1 (RFC 5737), reserved for documentation and
+	 *         never routed, so the SYN gets no reply, just like behind a firewall.
+	 */
+	@Test
+	void silentHostIsFiltered()
+	{
+		ScanResult r = PortProbe.probe("192.0.2.1", 80, 300);
+		assertEquals(ScanResult.State.FILTERED, r.state());
+		assertEquals("", r.banner());
+	}
+
+	/**
+	 * WHAT:   Hosts given out of order, including .9 and .10.
+	 * WHY:    Sorting addresses as text would put .10 before .9.
+	 *
+	 * @throws Exception if the local test server cannot be started
+	 */
+	@Test
+	void scannerSortsHostsNumerically() throws Exception
+	{
+		try (ServerSocket server = new ServerSocket(0))
+		{
+			int port = server.getLocalPort();
+			List<ScanResult> results = Scanner.scan(List.of("127.0.0.10", "127.0.0.9", "127.0.0.1"), List.of(port), 300, 10);
+			assertEquals(List.of("127.0.0.1", "127.0.0.9", "127.0.0.10"), results.stream().map(ScanResult::host).toList());
+		}
+	}
+
+	/**
+	 * WHAT:   A scan bigger than Scanner.MAX_PROBES, and a concurrency of 0.
+	 * WHY:    Both must be refused before any thread or socket is created.
+	 */
+	@Test
+	void scannerRejectsBadLimits()
+	{
+		List<String> hosts = TargetParser.parse("10.0.0.0/16");
+		List<Integer> ports = PortParser.parse("1-100");
+		assertThrows(IllegalArgumentException.class, () -> Scanner.scan(hosts, ports, 100, 10));
+		assertThrows(IllegalArgumentException.class, () -> Scanner.scan(List.of("127.0.0.1"), List.of(80), 100, 0));
+	}
+
+	/**
+	 * WHAT:   Nothing to scan.
+	 * WHY:    Empty input should give an empty result, not an error or a hang.
+	 */
+	@Test
+	void scannerHandlesEmptyInput()
+	{
+		assertTrue(Scanner.scan(List.of(), List.of(80), 100, 10).isEmpty());
 	}
 
 	/**
