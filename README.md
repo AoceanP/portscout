@@ -4,6 +4,45 @@ A multithreaded TCP port scanner in Java to understand how tools like nmap work:
 
 > Only scan hosts you own or have written permission to scan. `scanme.nmap.org` allows light scanning for testing.
 
+## Overview
+
+### What
+
+A command-line tool that takes an IPv4 address or subnet (e.g. `192.168.1.0/24`) and a list of ports, tries to connect to each one, and reports which ports are **open**, **closed** or **filtered**, plus the banner of the service behind each open port.
+
+### Problem
+
+Every device on a network listens on numbered **ports**: 22 is usually SSH, 80 and 443 are websites, 3389 is Remote Desktop. Network and security teams constantly need to know *which ports a machine exposes and what is running behind them*:
+
+- **Network engineering:** does the firewall really block what it should? What is on this subnet? Why can't anyone reach this service?
+- **Security:** every open port is a possible way in, and a banner such as `SSH-2.0-OpenSSH_7.2` shows the exact version to check against known vulnerabilities.
+- **Operations:** find forgotten services, like an old FTP server nobody switched off.
+
+Doing this by hand is slow and unclear:
+
+1. **Slow:** checking ports one at a time means waiting out a full timeout for every port that does not answer. On a firewalled host, 1,024 ports at 500 ms each is over **8 minutes**.
+2. **Unclear:** a failed connection alone does not say whether *nothing is listening* or *a firewall is hiding the port*, and those mean very different things.
+
+### Solution
+
+- **TCP connect scan** that reads the packet behaviour: a completed handshake is OPEN, a reset (RST) is CLOSED, silence until the timeout is FILTERED. That turns "it failed" into "nothing there" vs "a firewall is dropping it".
+- **Banner grabbing** to identify the service: read the greeting that SSH, FTP and SMTP send, and send an HTTP `HEAD` to services that stay silent.
+- **Java 21 virtual threads, capped by a semaphore,** so probes wait on the network in parallel: 1,024 ports at 200 at a time takes about 1,024 ÷ 200 × 0.5 s ≈ **3 seconds** in the worst case instead of 8 minutes, without exhausting sockets or flooding the target.
+- **CIDR parsing** to scan a whole subnet in one command, with safety limits (nothing bigger than a /16, at most 1,000,000 probes).
+
+### Why I built it
+
+nmap already does this well. portscout exists to understand **how it works underneath**, the networking, security and Java skills these jobs are built on:
+
+| Concept | Where it lives |
+|---|---|
+| TCP three-way handshake (SYN, SYN-ACK, RST) | `PortProbe`: open / closed / filtered |
+| Subnetting and CIDR math | `TargetParser`: network and broadcast addresses |
+| Service identification | `PortProbe.grabBanner` |
+| Firewall behaviour (drop vs refuse) | FILTERED vs CLOSED |
+| Concurrency in Java 21 | `Scanner`: virtual threads capped by a semaphore |
+| Testing and documentation | 28 JUnit tests, Javadoc, UML and flowchart below |
+
 ## Setup
 
 ### 1. Install the requirements
@@ -76,25 +115,6 @@ scanned 1 host(s) x 1024 port(s) in 1053 ms
 ```
 
 Ports 135 (RPC) and 445 (SMB file sharing) are open on every Windows PC; a home router keeps them hidden from the internet. Neither sends a banner, so the time shown includes waiting for one.
-
-## Why
-
-Every device on a network listens on numbered **ports**: 22 is usually SSH, 80 and 443 are websites, 3389 is Remote Desktop. A port scanner answers one question: *on this machine or subnet, which ports are open, and what is running behind them?*
-
-- **Network engineering:** check a firewall really blocks what it should, find every device on a subnet, or see why a service can't be reached.
-- **Security:** every open port is a possible way in, and a banner such as `SSH-2.0-OpenSSH_7.2` shows the exact version to check against known vulnerabilities. Scanning is the first step of most security assessments.
-- **Operations:** find forgotten services, like an old FTP server nobody switched off.
-
-nmap already does this well. portscout exists to show how it works underneath:
-
-| Concept | Where it lives |
-|---|---|
-| TCP three-way handshake (SYN, SYN-ACK, RST) | `PortProbe`: open / closed / filtered |
-| Subnetting and CIDR math | `TargetParser`: network and broadcast addresses |
-| Service identification | `PortProbe.grabBanner` |
-| Firewall behaviour (drop vs refuse) | FILTERED vs CLOSED |
-| Concurrency in Java 21 | `Scanner`: virtual threads capped by a semaphore |
-| Testing and documentation | JUnit tests, Javadoc, UML and flowchart below |
 
 ## How it works
 
