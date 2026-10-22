@@ -1,5 +1,14 @@
 package portscout;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.ConnectException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
+
 /**
  * WHAT:   Probes a single TCP port and, if it is open, grabs the service banner.
  * WHY:    Knowing a port is open is half the answer; the banner tells you
@@ -8,6 +17,16 @@ package portscout;
  */
 public final class PortProbe
 {
+	/** WHAT: the most banner bytes read. WHY: one greeting line fits easily, and a hostile service cannot flood us. */
+	private static final int MAX_BANNER_BYTES = 256;
+
+	/**
+	 * WHAT:   The request sent to services that stay silent.
+	 * WHY:    HTTP is the most common silent service, and HEAD asks for the
+	 *         status line and headers only, never a whole page.
+	 */
+	private static final byte[] HTTP_PROBE = "HEAD / HTTP/1.0\r\n\r\n".getBytes(StandardCharsets.US_ASCII);
+
 	/**
 	 * WHAT:   Blocks creating a PortProbe.
 	 * WHY:    The class only holds static helpers, so an instance means nothing.
@@ -27,15 +46,10 @@ public final class PortProbe
 	 *         CLOSED if the host refused (ConnectException),
 	 *         FILTERED on a timeout or any other IOException;
 	 *         millis is how long the probe took
-	 * HOW:    1. Record the start time with System.nanoTime().
-	 *         2. In try-with-resources, create a Socket and call
-	 *            connect(new InetSocketAddress(host, port), timeoutMs).
-	 *         3. If connect returns, call grabBanner and return OPEN.
-	 *         4. catch ConnectException first and return CLOSED.
-	 *         5. catch IOException (this covers SocketTimeoutException)
-	 *            and return FILTERED.
 	 * PACKETS: OPEN is SYN, SYN-ACK, ACK. CLOSED is SYN, RST.
 	 *         FILTERED is SYN, then silence until the timeout.
+	 * NOTE:   For an open port that stays silent, millis includes waiting
+	 *         for the banner (up to two read timeouts), not just the handshake.
 	 *
 	 * @param host      the IPv4 address to connect to
 	 * @param port      the TCP port to probe
@@ -44,7 +58,29 @@ public final class PortProbe
 	 */
 	public static ScanResult probe(String host, int port, int timeoutMs)
 	{
-		throw new UnsupportedOperationException("TODO: implement PortProbe.probe");
+		long start = System.nanoTime();
+		ScanResult.State state = ScanResult.State.FILTERED;
+		String banner = "";
+
+		try (Socket socket = new Socket())
+		{
+			socket.connect(new InetSocketAddress(host, port), timeoutMs);
+			state = ScanResult.State.OPEN;
+			banner = grabBanner(socket, timeoutMs);
+		}
+		catch (ConnectException e)
+		{
+			// the host answered the SYN with a RST: nothing listens there
+			state = ScanResult.State.CLOSED;
+		}
+		catch (IOException e)
+		{
+			// a timeout or no route: leave FILTERED. If the port was already
+			// OPEN and only closing the socket failed, it stays OPEN.
+		}
+
+		long millis = (System.nanoTime() - start) / 1_000_000;
+		return new ScanResult(host, port, state, banner, millis);
 	}
 
 	/**
@@ -55,20 +91,65 @@ public final class PortProbe
 	 * PRE:    timeoutMs is a positive integer
 	 * RETURN: the first line, trimmed, with non-printable characters replaced
 	 *         by '.', or "" if nothing useful came back; never throws
-	 * HOW:    1. socket.setSoTimeout(timeoutMs) so a read cannot hang forever.
-	 *         2. Read up to 256 bytes from the input stream.
-	 *         3. On SocketTimeoutException, write "HEAD / HTTP/1.0\r\n\r\n"
-	 *            to the output stream and read once more.
-	 *         4. Keep the text before the first line break, trim it, and
-	 *            replace non-printable characters with '.'.
-	 *         5. Catch any other IOException and return "".
 	 *
 	 * @param socket    an open, connected socket; the caller closes it
 	 * @param timeoutMs how long each read may wait, in milliseconds
 	 * @return the cleaned first line of the banner, or "" if there is none
 	 */
-	static String grabBanner(java.net.Socket socket, int timeoutMs)
+	static String grabBanner(Socket socket, int timeoutMs)
 	{
-		throw new UnsupportedOperationException("TODO: implement PortProbe.grabBanner");
+		try
+		{
+			// without a read timeout a silent service would block this thread forever
+			socket.setSoTimeout(timeoutMs);
+			InputStream in = socket.getInputStream();
+			byte[] buffer = new byte[MAX_BANNER_BYTES];
+
+			int read;
+			try
+			{
+				read = in.read(buffer);
+			}
+			catch (SocketTimeoutException silent)
+			{
+				OutputStream out = socket.getOutputStream();
+				out.write(HTTP_PROBE);
+				out.flush();
+				read = in.read(buffer);
+			}
+
+			// ISO-8859-1 maps every byte to one char, so binary junk cannot break decoding
+			return read > 0 ? firstPrintableLine(new String(buffer, 0, read, StandardCharsets.ISO_8859_1)) : "";
+		}
+		catch (IOException e)
+		{
+			return "";
+		}
+	}
+
+	/**
+	 * WHAT:   Cuts raw service output down to its first line of plain text.
+	 * WHY:    Banners are untrusted remote data; control characters could
+	 *         mess up the terminal or the report, so they become '.'.
+	 * PRE:    raw is not null
+	 * RETURN: the text before the first line break, trimmed, printable ASCII only
+	 *
+	 * @param raw the bytes the service sent, decoded one byte per char
+	 * @return the cleaned first line
+	 */
+	private static String firstPrintableLine(String raw)
+	{
+		int end = 0;
+		while (end < raw.length() && raw.charAt(end) != '\r' && raw.charAt(end) != '\n')
+		{
+			end++;
+		}
+
+		StringBuilder line = new StringBuilder();
+		for (char c : raw.substring(0, end).trim().toCharArray())
+		{
+			line.append(c >= ' ' && c <= '~' ? c : '.');
+		}
+		return line.toString();
 	}
 }
