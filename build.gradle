@@ -1,0 +1,35 @@
+plugins {
+	id 'application'
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	testImplementation platform('org.junit:junit-bom:5.11.4')
+	testImplementation 'org.junit.jupiter:junit-jupiter'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// Java 21+ for virtual threads; builds with any newer JDK
+tasks.withType(JavaCompile).configureEach {
+	options.release = 21
+}
+
+// Doc comments are WHAT/WHY/PRE/RETURN text plus @param/@return/@throws tags.
+// doclint fails the build if a public method is missing a tag; -html allows plain text.
+tasks.named('javadoc') {
+	options.addStringOption('Xdoclint:all,-html', '-quiet')
+}
+
+application {
+	mainClass = 'portscout.Main'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+	testLogging {
+		events 'passed', 'failed', 'skipped'
+	}
+}
