@@ -1,6 +1,8 @@
 package portscout;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.TreeSet;
 
 /**
  * WHAT:   Turns a port spec like "22,80,443,8000-8100" into a list of ports.
@@ -9,9 +11,15 @@ import java.util.List;
  */
 public final class PortParser
 {
+	/** WHAT: the lowest valid TCP port. Port 0 is reserved and cannot be connected to. */
+	private static final int MIN_PORT = 1;
+
+	/** WHAT: the highest valid TCP port, the largest 16-bit number. */
+	private static final int MAX_PORT = 65535;
+
 	/**
 	 * WHAT:   Blocks creating a PortParser.
-	 * WHY:    The class only holds a static helper, so an instance means nothing.
+	 * WHY:    The class only holds static helpers, so an instance means nothing.
 	 */
 	private PortParser()
 	{
@@ -25,12 +33,6 @@ public final class PortParser
 	 * THROWS: IllegalArgumentException if spec is empty, has text that is
 	 *         not a number, a port outside 1 to 65535, or a range whose
 	 *         start is bigger than its end
-	 * HOW:    1. Remove spaces and split on commas.
-	 *         2. Each part is a single port ("80") or a range ("8000-8100");
-	 *            split a range on "-" and parse both ends with Integer.parseInt.
-	 *         3. Turn a NumberFormatException into IllegalArgumentException.
-	 *         4. Add every port to a TreeSet, which sorts and removes
-	 *            duplicates, then return it as a List.
 	 *
 	 * @param spec ports and ranges separated by commas, e.g. "22,80,8000-8100"
 	 * @return the ports in ascending order, without duplicates
@@ -39,6 +41,65 @@ public final class PortParser
 	 */
 	public static List<Integer> parse(String spec)
 	{
-		throw new UnsupportedOperationException("TODO: implement PortParser.parse");
+		String cleaned = spec.replace(" ", "");
+		if (cleaned.isEmpty())
+		{
+			throw new IllegalArgumentException("no ports given");
+		}
+
+		// a TreeSet keeps the ports sorted and drops duplicates for free
+		TreeSet<Integer> ports = new TreeSet<>();
+		for (String part : cleaned.split(",", -1))
+		{
+			String[] ends = part.split("-", -1);
+			if (ends.length > 2)
+			{
+				throw new IllegalArgumentException("bad port range: " + part);
+			}
+
+			int start = toPort(ends[0]);
+			int end = ends.length == 2 ? toPort(ends[1]) : start;
+			if (start > end)
+			{
+				throw new IllegalArgumentException("range start is bigger than its end: " + part);
+			}
+
+			for (int port = start; port <= end; port++)
+			{
+				ports.add(port);
+			}
+		}
+		return new ArrayList<>(ports);
+	}
+
+	/**
+	 * WHAT:   Converts one piece of text into a port number.
+	 * WHY:    Keeps the number and range checks in one place for both
+	 *         single ports and the two ends of a range.
+	 * PRE:    text is not null
+	 * RETURN: the port number
+	 * THROWS: IllegalArgumentException if text is not a number from 1 to 65535
+	 *
+	 * @param text the text to convert, e.g. "443"
+	 * @return the port number
+	 * @throws IllegalArgumentException if text is not a valid port
+	 */
+	private static int toPort(String text)
+	{
+		int port;
+		try
+		{
+			port = Integer.parseInt(text);
+		}
+		catch (NumberFormatException e)
+		{
+			throw new IllegalArgumentException("not a port number: '" + text + "'");
+		}
+
+		if (port < MIN_PORT || port > MAX_PORT)
+		{
+			throw new IllegalArgumentException("port out of range 1-65535: " + port);
+		}
+		return port;
 	}
 }

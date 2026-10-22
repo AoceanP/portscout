@@ -66,4 +66,16 @@ class PortParserTest
 		assertThrows(IllegalArgumentException.class, () -> PortParser.parse("abc"));
 		assertThrows(IllegalArgumentException.class, () -> PortParser.parse(""));
 	}
+
+	/**
+	 * WHAT:   A trailing comma, a missing range end, and a double dash.
+	 * WHY:    Typos like "80," must fail instead of being silently ignored.
+	 */
+	@Test
+	void rejectsTypos()
+	{
+		assertThrows(IllegalArgumentException.class, () -> PortParser.parse("80,"));
+		assertThrows(IllegalArgumentException.class, () -> PortParser.parse("80-"));
+		assertThrows(IllegalArgumentException.class, () -> PortParser.parse("1-2-3"));
+	}
 }
