@@ -123,6 +123,16 @@ Ports 135 (RPC) and 445 (SMB file sharing) are open on every Windows PC; a home 
 - **Concurrency:** a semaphore permit is taken before each virtual thread starts, so at most `-c` probes exist at once and the scan never exhausts sockets.
 - **Safety limits:** blocks bigger than a /16 and scans over 1,000,000 probes are refused.
 
+## Privacy and data
+
+Scan results can reveal weak spots in a network, so portscout keeps nothing:
+
+- **No storage:** no database, no log files, no history. Results are printed once to the terminal and exist only in memory until the program exits.
+- **No network calls** other than the probes you ask for: no telemetry, no update checks, no lookups.
+- **No dependencies at runtime:** only the Java standard library, so no third-party code can collect or send anything.
+
+If you save output yourself (for example `portscout 192.168.1.0/24 --json > scan.json`), treat that file as sensitive and don't commit it.
+
 ## Design
 
 ### Program flow
