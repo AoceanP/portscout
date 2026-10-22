@@ -32,6 +32,6 @@ tasks.named('test') {
 	testLogging {
 		events 'passed', 'failed', 'skipped'
 		// print the assertion and stack trace, so a rare failure can be diagnosed from one run
-		exceptionFormat 'full'
+		exceptionFormat = 'full'
 	}
 }
