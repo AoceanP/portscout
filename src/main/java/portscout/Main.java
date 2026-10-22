@@ -74,6 +74,11 @@ public final class Main
 				}
 			}
 
+			if (timeout < 1 || concurrency < 1)
+			{
+				throw new IllegalArgumentException("timeout and concurrency must be at least 1");
+			}
+
 			List<String> hosts = TargetParser.parse(target);
 			List<Integer> portList = PortParser.parse(ports);
 
@@ -87,8 +92,16 @@ public final class Main
 				System.out.printf("scanned %d host(s) x %d port(s) in %d ms%n", hosts.size(), portList.size(), ms);
 			}
 		}
-		catch (IllegalArgumentException | ArrayIndexOutOfBoundsException e)
+		catch (ArrayIndexOutOfBoundsException e)
 		{
+			// an option like -p was the last argument, with no value after it
+			System.err.println("error: " + args[args.length - 1] + " needs a value");
+			System.err.print(USAGE);
+			System.exit(2);
+		}
+		catch (IllegalArgumentException e)
+		{
+			// NumberFormatException is a subclass, so "-t abc" lands here too
 			System.err.println("error: " + e.getMessage());
 			System.err.print(USAGE);
 			System.exit(2);
