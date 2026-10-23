@@ -43,6 +43,17 @@ nmap already does this well. portscout exists to understand **how it works under
 | Concurrency in Java 21 | `Scanner`: virtual threads capped by a semaphore |
 | Testing and documentation | 42 JUnit tests, Javadoc, UML, flowchart and the edge cases below |
 
+### How it fits with my other projects
+
+Each project looks at the same network from a different side:
+
+| Project | Language | View | Question it answers |
+|---|---|---|---|
+| **portscout** (this one) | Java 21 | the attacker's view | What ports are open, and what is running behind them? |
+| [**wiresight**](https://github.com/AoceanP/wiresight) | C++20 | the network's view | What is actually on the wire? |
+
+They work together: run wiresight on the loopback adapter while portscout scans, and every probe becomes visible. A closed port answers `SYN` with `RST`, an open one completes the `SYN`, `SYN-ACK`, `ACK` handshake, and you can even see portscout's 19-byte banner probe. The full capture is in [wiresight's README](https://github.com/AoceanP/wiresight#example-watching-portscout).
+
 ## Setup
 
 ### 1. Install the requirements
