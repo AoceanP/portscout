@@ -61,6 +61,28 @@ class PortProbeTest
 			ScanResult r = PortProbe.probe("127.0.0.1", server.getLocalPort(), 500);
 			assertEquals(ScanResult.State.OPEN, r.state());
 			assertEquals("HTTP/1.0 200 OK", r.banner());
+			// the Server header is on the second line, so this proves the whole reply is kept
+			assertEquals("http", r.service().name());
+			assertEquals("test", r.service().product());
+		}
+	}
+
+	/**
+	 * WHAT:   A server that greets with SSH and a version.
+	 * WHY:    Checks a real probe fills in the service, not just the banner.
+	 *
+	 * @throws Exception if the local test server cannot be started
+	 */
+	@Test
+	void openPortIdentifiesService() throws Exception
+	{
+		try (ServerSocket server = new ServerSocket(0))
+		{
+			serveOnce(server, "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3\r\n");
+			ScanResult r = PortProbe.probe("127.0.0.1", server.getLocalPort(), 1000);
+			assertEquals("ssh", r.service().name());
+			assertEquals("OpenSSH 9.6p1", r.service().software());
+			assertEquals(Service.Source.BANNER, r.service().source());
 		}
 	}
 

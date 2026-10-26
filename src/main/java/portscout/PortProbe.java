@@ -17,8 +17,16 @@ import java.nio.charset.StandardCharsets;
  */
 public final class PortProbe
 {
-	/** WHAT: the most banner bytes read. WHY: one greeting line fits easily, and a hostile service cannot flood us. */
-	private static final int MAX_BANNER_BYTES = 256;
+	/**
+	 * WHAT:   The most reply bytes read.
+	 * WHY:    Enough for a greeting or an HTTP status line plus its headers
+	 *         (the Server header names the software), but a hostile service
+	 *         cannot flood us.
+	 */
+	private static final int MAX_BANNER_BYTES = 1024;
+
+	/** WHAT: the longest banner line kept, in characters. */
+	private static final int MAX_LINE = 200;
 
 	/**
 	 * WHAT:   The request sent to services that stay silent.
@@ -42,7 +50,7 @@ public final class PortProbe
 	 * PRE:    host is a dotted IPv4 address
 	 * PRE:    port is between 1 and 65535
 	 * PRE:    timeoutMs is a positive integer
-	 * RETURN: OPEN with the banner if the connect succeeds,
+	 * RETURN: OPEN with the banner and the identified service if the connect succeeds,
 	 *         CLOSED if the host refused (ConnectException),
 	 *         FILTERED on a timeout or any other IOException;
 	 *         millis is how long the probe took
@@ -60,13 +68,13 @@ public final class PortProbe
 	{
 		long start = System.nanoTime();
 		ScanResult.State state = ScanResult.State.FILTERED;
-		String banner = "";
+		String reply = "";
 
 		try (Socket socket = new Socket())
 		{
 			socket.connect(new InetSocketAddress(host, port), timeoutMs);
 			state = ScanResult.State.OPEN;
-			banner = grabBanner(socket, timeoutMs);
+			reply = grabReply(socket, timeoutMs);
 		}
 		catch (ConnectException e)
 		{
@@ -80,23 +88,24 @@ public final class PortProbe
 		}
 
 		long millis = (System.nanoTime() - start) / 1_000_000;
-		return new ScanResult(host, port, state, banner, millis);
+		Service service = state == ScanResult.State.OPEN ? Service.identify(port, reply) : Service.UNKNOWN;
+		return new ScanResult(host, port, state, firstPrintableLine(reply), millis, service);
 	}
 
 	/**
-	 * WHAT:   Reads the first line a service sends on a connected socket.
+	 * WHAT:   Reads what a service sends on a connected socket.
 	 * WHY:    SSH, FTP and SMTP greet you first; HTTP stays silent until asked,
 	 *         so one small HEAD request covers the most common silent service.
 	 * PRE:    socket is connected
 	 * PRE:    timeoutMs is a positive integer
-	 * RETURN: the first line, trimmed, with non-printable characters replaced
-	 *         by '.', or "" if nothing useful came back; never throws
+	 * RETURN: the raw reply (up to MAX_BANNER_BYTES, one char per byte, may
+	 *         be binary), or "" if nothing came back; never throws
 	 *
 	 * @param socket    an open, connected socket; the caller closes it
 	 * @param timeoutMs how long each read may wait, in milliseconds
-	 * @return the cleaned first line of the banner, or "" if there is none
+	 * @return the raw reply, or ""
 	 */
-	static String grabBanner(Socket socket, int timeoutMs)
+	static String grabReply(Socket socket, int timeoutMs)
 	{
 		try
 		{
@@ -119,7 +128,7 @@ public final class PortProbe
 			}
 
 			// ISO-8859-1 maps every byte to one char, so binary junk cannot break decoding
-			return read > 0 ? firstPrintableLine(new String(buffer, 0, read, StandardCharsets.ISO_8859_1)) : "";
+			return read > 0 ? new String(buffer, 0, read, StandardCharsets.ISO_8859_1) : "";
 		}
 		catch (IOException e)
 		{
@@ -137,7 +146,7 @@ public final class PortProbe
 	 * @param raw the bytes the service sent, decoded one byte per char
 	 * @return the cleaned first line
 	 */
-	private static String firstPrintableLine(String raw)
+	static String firstPrintableLine(String raw)
 	{
 		int end = 0;
 		while (end < raw.length() && raw.charAt(end) != '\r' && raw.charAt(end) != '\n')
@@ -145,9 +154,14 @@ public final class PortProbe
 			end++;
 		}
 
+		// the reply can be 1 KB of binary with no line break; a banner line stays short
 		StringBuilder line = new StringBuilder();
 		for (char c : raw.substring(0, end).trim().toCharArray())
 		{
+			if (line.length() == MAX_LINE)
+			{
+				break;
+			}
 			line.append(c >= ' ' && c <= '~' ? c : '.');
 		}
 		return line.toString();

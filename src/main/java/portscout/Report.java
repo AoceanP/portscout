@@ -1,6 +1,7 @@
 package portscout;
 
 import java.util.List;
+import java.util.Locale;
 
 /**
  * WHAT:   Formats scan results as a readable table or as JSON.
@@ -20,6 +21,7 @@ public final class Report
 	/**
 	 * WHAT:   Builds a fixed-width table of results with a summary line.
 	 * WHY:    Hiding closed ports by default keeps the useful findings on screen.
+	 *         SERVICE ends in "?" when it is only guessed from the port number.
 	 * PRE:    results is not null
 	 * RETURN: the table as one string, ending with "N open of M probed"
 	 *
@@ -30,15 +32,16 @@ public final class Report
 	public static String table(List<ScanResult> results, boolean showClosed)
 	{
 		StringBuilder sb = new StringBuilder();
-		sb.append(String.format("%-16s %-6s %-9s %-6s %s%n", "HOST", "PORT", "STATE", "MS", "BANNER"));
+		sb.append(String.format("%-16s %-6s %-9s %-11s %-26s %-6s %s%n",
+			"HOST", "PORT", "STATE", "SERVICE", "SOFTWARE", "MS", "BANNER"));
 		for (ScanResult r : results)
 		{
 			if (!showClosed && r.state() != ScanResult.State.OPEN)
 			{
 				continue;
 			}
-			sb.append(String.format("%-16s %-6d %-9s %-6d %s%n",
-				r.host(), r.port(), r.state(), r.millis(), r.banner()));
+			sb.append(String.format("%-16s %-6d %-9s %-11s %-26s %-6d %s%n", r.host(), r.port(), r.state(),
+				r.service().label(), r.service().software(), r.millis(), r.banner()));
 		}
 		long open = results.stream().filter(r -> r.state() == ScanResult.State.OPEN).count();
 		sb.append(String.format("%d open of %d probed%n", open, results.size()));
@@ -48,7 +51,9 @@ public final class Report
 	/**
 	 * WHAT:   Builds a JSON array with one object per result.
 	 * WHY:    Written by hand so the project needs no libraries; the banner
-	 *         is escaped because it is text from a remote server.
+	 *         and software are escaped because they are text from a remote
+	 *         server. "identified_by" says whether the service came from the
+	 *         banner, only the port number, or nothing.
 	 * PRE:    results is not null
 	 * RETURN: a JSON array of every result, including closed and filtered ones
 	 *
@@ -61,8 +66,11 @@ public final class Report
 		for (int i = 0; i < results.size(); i++)
 		{
 			ScanResult r = results.get(i);
-			sb.append(String.format("  {\"host\": \"%s\", \"port\": %d, \"state\": \"%s\", \"banner\": \"%s\", \"ms\": %d}",
-				r.host(), r.port(), r.state(), escape(r.banner()), r.millis()));
+			Service service = r.service();
+			sb.append(String.format("  {\"host\": \"%s\", \"port\": %d, \"state\": \"%s\", \"service\": \"%s\", "
+					+ "\"product\": \"%s\", \"version\": \"%s\", \"identified_by\": \"%s\", \"banner\": \"%s\", \"ms\": %d}",
+				r.host(), r.port(), r.state(), escape(service.name()), escape(service.product()), escape(service.version()),
+				service.source().name().toLowerCase(Locale.ROOT), escape(r.banner()), r.millis()));
 			sb.append(i < results.size() - 1 ? ",\n" : "\n");
 		}
 		return sb.append("]\n").toString();

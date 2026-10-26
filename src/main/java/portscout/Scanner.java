@@ -7,6 +7,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
+import java.util.function.Consumer;
 
 /**
  * WHAT:   Runs many port probes at the same time.
@@ -53,6 +54,30 @@ public final class Scanner
 	 */
 	public static List<ScanResult> scan(List<String> hosts, List<Integer> ports, int timeoutMs, int maxConcurrent)
 	{
+		return scan(hosts, ports, timeoutMs, maxConcurrent, result -> { });
+	}
+
+	/**
+	 * WHAT:   Like scan(hosts, ports, timeoutMs, maxConcurrent), and also hands
+	 *         each result to onResult the moment its probe finishes.
+	 * WHY:    Lets the recon view draw the scan while it runs, instead of
+	 *         only after the last probe.
+	 * PRE:    the same as the four-argument scan
+	 * PRE:    onResult is not null and safe to call from many threads at once
+	 * RETURN: one ScanResult per host and port pair, sorted by host, then port
+	 * THROWS: IllegalArgumentException if maxConcurrent is below 1 or the scan is too big
+	 *
+	 * @param hosts         the IPv4 addresses to scan
+	 * @param ports         the TCP ports to probe on every host
+	 * @param timeoutMs     connect and read timeout per probe, in milliseconds
+	 * @param maxConcurrent the most probes allowed to run at the same time
+	 * @param onResult      called with each result as soon as it is known
+	 * @return every result, sorted by host, then port
+	 * @throws IllegalArgumentException if maxConcurrent is below 1 or the scan is too big
+	 */
+	public static List<ScanResult> scan(List<String> hosts, List<Integer> ports, int timeoutMs, int maxConcurrent,
+		Consumer<ScanResult> onResult)
+	{
 		if (maxConcurrent < 1)
 		{
 			throw new IllegalArgumentException("concurrency must be at least 1");
@@ -80,7 +105,9 @@ public final class Scanner
 					futures.add(executor.submit(() -> {
 						try
 						{
-							return PortProbe.probe(host, port, timeoutMs);
+							ScanResult result = PortProbe.probe(host, port, timeoutMs);
+							onResult.accept(result);
+							return result;
 						}
 						finally
 						{

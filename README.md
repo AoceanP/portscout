@@ -8,7 +8,11 @@ A multithreaded TCP port scanner in Java to understand how tools like nmap work:
 
 ### What
 
-A command-line tool that takes an IPv4 address or subnet (e.g. `192.168.1.0/24`) and a list of ports, tries to connect to each one, and reports which ports are **open**, **closed** or **filtered**, plus the banner of the service behind each open port.
+A command-line tool that takes an IPv4 address or subnet (e.g. `192.168.1.0/24`) and a list of ports, tries to connect to each one, and reports which ports are **open**, **closed** or **filtered**, and **what is running** behind each open port: the service, the software and its version (`ssh · OpenSSH 9.6p1`, `http · nginx 1.24.0`).
+
+With `--watch` it draws the scan live in the terminal as pixel art: you and the target, probes going out along the wire, a map of the ports filling in, and a card with an icon for every service found.
+
+![The recon view after scanning this PC: the port map, the progress line, and cards for SMB, AMQP and four web servers](docs/recon-view.png)
 
 ### Problem
 
@@ -27,6 +31,7 @@ Doing this by hand is slow and unclear:
 
 - **TCP connect scan** that reads the packet behaviour: a completed handshake is OPEN, a reset (RST) is CLOSED, silence until the timeout is FILTERED. That turns "it failed" into "nothing there" vs "a firewall is dropping it".
 - **Banner grabbing** to identify the service: read the greeting that SSH, FTP and SMTP send, and send an HTTP `HEAD` to services that stay silent.
+- **Service and version detection** from what came back: the SSH greeting, the HTTP `Server:` header, FTP and mail greetings, the binary MySQL/MariaDB greeting, VNC, Redis and AMQP. When the service says nothing, the usual service for that port is shown as a guess, marked with `?`, because anything can listen on any port.
 - **Java 21 virtual threads, capped by a semaphore,** so probes wait on the network in parallel: 1,024 ports at 200 at a time takes about 1,024 ÷ 200 × 0.5 s ≈ **3 seconds** in the worst case instead of 8 minutes (measured: 93x faster on a silent host, see [Benchmarks](#benchmarks)), without exhausting sockets or flooding the target.
 - **CIDR parsing** to scan a whole subnet in one command, with safety limits (nothing bigger than a /16, at most 1,000,000 probes).
 
@@ -38,10 +43,11 @@ nmap already does this well. portscout exists to understand **how it works under
 |---|---|
 | TCP three-way handshake (SYN, SYN-ACK, RST) | `PortProbe`: open / closed / filtered |
 | Subnetting and CIDR math | `TargetParser`: network and broadcast addresses |
-| Service identification | `PortProbe.grabBanner` |
+| Service and version identification | `PortProbe.grabReply`, `Service.identify` |
+| Drawing in a terminal: half blocks, 24-bit colour, redrawing in place | `ReconView` |
 | Firewall behaviour (drop vs refuse) | FILTERED vs CLOSED |
 | Concurrency in Java 21 | `Scanner`: virtual threads capped by a semaphore |
-| Testing and documentation | 42 JUnit tests, Javadoc, UML, flowchart and the edge cases below |
+| Testing and documentation | 70 JUnit tests, Javadoc, UML, flowchart and the edge cases below |
 
 ### Part of a project series
 
@@ -115,19 +121,47 @@ portscout <target> [options]
 | `-c, --concurrency` | probes running at once | `200` |
 | `--json` | JSON output, including closed and filtered ports | off |
 | `--all` | also list closed and filtered ports in the table | off |
+| `-w, --watch` | show the recon view while scanning, then the table | off |
 
 Example, a scan of a Windows PC:
 
 ```
-> portscout 127.0.0.1 -p 1-1024
-HOST             PORT   STATE     MS     BANNER
-127.0.0.1        135    OPEN      1009
-127.0.0.1        445    OPEN      501
-2 open of 1024 probed
-scanned 1 host(s) x 1024 port(s) in 1053 ms
+> portscout 127.0.0.1 -p 1-1024,5357,5672,8080,15672
+HOST             PORT   STATE     SERVICE     SOFTWARE                   MS     BANNER
+127.0.0.1        135    OPEN      msrpc?                                 1009
+127.0.0.1        445    OPEN      smb?                                   501
+127.0.0.1        5357   OPEN      http        Microsoft-HTTPAPI 2.0      502    HTTP/1.1 503 Service Unavailable
+127.0.0.1        5672   OPEN      amqp                                   503    AMQP
+127.0.0.1        8080   OPEN      http                                   509    HTTP/1.0 404 Not Found
+127.0.0.1        15672  OPEN      http        Cowboy                     503    HTTP/1.1 200 OK
+6 open of 1028 probed
+scanned 1 host(s) x 1028 port(s) in 1054 ms
 ```
 
-Ports 135 (RPC) and 445 (SMB file sharing) are open on every Windows PC; a home router keeps them hidden from the internet. Neither sends a banner, so the time shown includes waiting for one.
+- **135 and 445** (RPC and SMB file sharing) are open on every Windows PC; a home router keeps them hidden from the internet. Neither says anything, so `msrpc?` and `smb?` are guesses from the port number.
+- **5357** is Windows' own web server, which names itself in its `Server:` header.
+- **5672 and 15672** are a RabbitMQ message broker running in Docker: the first answers in its own protocol (AMQP), the second is its management website, served by Cowboy.
+- **8080** is a web server that does not name itself, so only "http" is known.
+
+In JSON, each result also has `service`, `product`, `version` and `identified_by` (`banner`, `port` or `none`).
+
+### Recon view
+
+```
+portscout 127.0.0.1 --watch
+```
+
+| Part | What it shows |
+|---|---|
+| **The wire** | probes going out to the target (amber) and answers coming back, green when an open port was just found |
+| **The server's lights** | power, amber while being probed, green once an open port is found, brown if a port never answered |
+| **The progress line** | probes done, and the open, closed and filtered counts as they come in |
+| **The port map** | one pixel per port, in scan order: dark while waiting, green open, dark red closed, brown filtered. A big scan shows several probes per pixel, and the most interesting one wins (open first) |
+| **Services found** | a card for each open port, with an icon for its kind (key: remote shell, globe: web, lock: encrypted, folder: file sharing, envelope: mail or messaging, cylinder: database, screen: remote desktop), its name and the software, or why the software is unknown |
+
+The full table is printed below the view when the scan ends. The view needs a terminal with 24-bit colour and at least 80 x 28 characters: Windows Terminal (the default on Windows 11), and any common macOS or Linux terminal. Every character it draws exists in code page 437, the Windows console default.
+
+**Scanning many ports of Docker containers on Windows:** Docker Desktop forwards each container port through one process, which slows down when hundreds of connections arrive at once. A web server in a container can then miss the banner timeout and show only `http?`. Scanning just those ports, or using `-c 50`, gives it time to answer.
 
 ## How it works
 
@@ -198,7 +232,9 @@ Past 50 there is no gain: the scan can never finish faster than its slowest prob
 - [x] Benchmarks
 - [ ] Compare against `nmap -sT`
 - [ ] Stretch: UDP probes for DNS (53) and NTP (123)
-- [ ] Stretch: map banners to known versions and flag outdated ones
+- [x] Identify the service, software and version behind each open port
+- [x] Recon view: a live pixel-art picture of the scan
+- [ ] Stretch: map versions to known vulnerabilities and flag outdated ones
 
 ## License
 

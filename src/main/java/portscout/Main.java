@@ -1,6 +1,7 @@
 package portscout;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * WHAT:   Command line entry point for portscout.
@@ -21,9 +22,17 @@ public final class Main
 		  -c, --concurrency N probes running at once (default 200)
 		  --json              print JSON instead of a table
 		  --all               also list closed and filtered ports
+		  -w, --watch         show the recon view: a live pixel-art picture of the scan
 
 		Only scan hosts you own or have written permission to scan.
 		""";
+
+	/** WHAT: terminal code that clears the screen, for the recon view. */
+	private static final String CLEAR_SCREEN = "\u001b[2J";
+	/** WHAT: terminal code that hides the cursor while the view redraws. */
+	private static final String HIDE_CURSOR = "\u001b[?25l";
+	/** WHAT: terminal code that shows the cursor again. */
+	private static final String SHOW_CURSOR = "\u001b[?25h";
 
 	/**
 	 * WHAT:   Blocks creating a Main.
@@ -58,6 +67,7 @@ public final class Main
 		int concurrency = 200;
 		boolean json = false;
 		boolean all = false;
+		boolean watch = false;
 
 		try
 		{
@@ -70,6 +80,7 @@ public final class Main
 					case "-c", "--concurrency" -> concurrency = toNumber(args[i], args[++i]);
 					case "--json" -> json = true;
 					case "--all" -> all = true;
+					case "-w", "--watch" -> watch = true;
 					default -> throw new IllegalArgumentException("unknown option " + args[i]);
 				}
 			}
@@ -78,12 +89,18 @@ public final class Main
 			{
 				throw new IllegalArgumentException("timeout and concurrency must be at least 1");
 			}
+			if (watch && json)
+			{
+				throw new IllegalArgumentException("--watch draws a picture, so it cannot be combined with --json");
+			}
 
 			List<String> hosts = TargetParser.parse(target);
 			List<Integer> portList = PortParser.parse(ports);
 
 			long start = System.nanoTime();
-			List<ScanResult> results = Scanner.scan(hosts, portList, timeout, concurrency);
+			List<ScanResult> results = watch
+				? scanWatched(hosts, portList, timeout, concurrency, target)
+				: Scanner.scan(hosts, portList, timeout, concurrency);
 			long ms = (System.nanoTime() - start) / 1_000_000;
 
 			System.out.print(json ? Report.json(results) : Report.table(results, all));
@@ -105,6 +122,72 @@ public final class Main
 			System.err.println("error: " + e.getMessage());
 			System.err.print(USAGE);
 			System.exit(2);
+		}
+	}
+
+	/**
+	 * WHAT:   Runs the scan while drawing the recon view about 12 times a second.
+	 * WHY:    The scan threads only record results; one drawing thread
+	 *         redraws the screen in place, so a fast scan never floods the
+	 *         terminal. The last frame stays on screen above the table.
+	 * PRE:    the same as Scanner.scan
+	 * POST:   the final frame is printed and the cursor is visible again,
+	 *         even if the scan throws or the user presses Ctrl+C
+	 * RETURN: the scan results, sorted
+	 *
+	 * @param hosts       the hosts to scan
+	 * @param ports       the ports to probe
+	 * @param timeout     the probe timeout, in milliseconds
+	 * @param concurrency the most probes at once
+	 * @param target      the target as typed, shown in the view
+	 * @return every result, sorted by host, then port
+	 */
+	private static List<ScanResult> scanWatched(List<String> hosts, List<Integer> ports, int timeout, int concurrency,
+		String target)
+	{
+		ReconView view = new ReconView(hosts, ports, target);
+		AtomicBoolean scanning = new AtomicBoolean(true);
+		// Ctrl+C skips the finally block below, but shutdown hooks still run
+		Thread showCursor = new Thread(() -> System.out.print(SHOW_CURSOR));
+		Runtime.getRuntime().addShutdownHook(showCursor);
+
+		System.out.print(CLEAR_SCREEN + HIDE_CURSOR);
+		Thread drawer = Thread.ofPlatform().daemon().start(() -> {
+			int tick = 0;
+			while (scanning.get())
+			{
+				System.out.print(view.render(tick++, false));
+				System.out.flush();
+				try
+				{
+					Thread.sleep(80);
+				}
+				catch (InterruptedException e)
+				{
+					return;
+				}
+			}
+		});
+
+		try
+		{
+			return Scanner.scan(hosts, ports, timeout, concurrency, view::record);
+		}
+		finally
+		{
+			scanning.set(false);
+			try
+			{
+				drawer.join();
+			}
+			catch (InterruptedException e)
+			{
+				Thread.currentThread().interrupt();
+			}
+			System.out.print(view.render(0, true));
+			System.out.println(SHOW_CURSOR);
+			System.out.flush();
+			Runtime.getRuntime().removeShutdownHook(showCursor);
 		}
 	}
 
