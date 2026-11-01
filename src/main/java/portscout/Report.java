@@ -32,16 +32,18 @@ public final class Report
 	public static String table(List<ScanResult> results, boolean showClosed)
 	{
 		StringBuilder sb = new StringBuilder();
-		sb.append(String.format("%-16s %-6s %-9s %-11s %-26s %-6s %s%n",
-			"HOST", "PORT", "STATE", "SERVICE", "SOFTWARE", "MS", "BANNER"));
+		// IPv6 addresses can be up to 39 characters, so the host column grows to fit
+		int hostWidth = Math.max(16, results.stream().mapToInt(r -> r.host().length()).max().orElse(0));
+		String row = "%-" + hostWidth + "s %-6s %-9s %-11s %-26s %-6s %s%n";
+		sb.append(String.format(row, "HOST", "PORT", "STATE", "SERVICE", "SOFTWARE", "MS", "BANNER"));
 		for (ScanResult r : results)
 		{
 			if (!showClosed && r.state() != ScanResult.State.OPEN)
 			{
 				continue;
 			}
-			sb.append(String.format("%-16s %-6d %-9s %-11s %-26s %-6d %s%n", r.host(), r.port(), r.state(),
-				r.service().label(), r.service().software(), r.millis(), r.banner()));
+			sb.append(String.format(row, r.host(), r.port(), r.state(), r.service().label(), r.service().software(),
+				r.millis(), r.banner()));
 		}
 		long open = results.stream().filter(r -> r.state() == ScanResult.State.OPEN).count();
 		sb.append(String.format("%d open of %d probed%n", open, results.size()));

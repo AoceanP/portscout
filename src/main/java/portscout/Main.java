@@ -16,10 +16,13 @@ public final class Main
 	 */
 	private static final String USAGE = """
 		usage: portscout <target> [options]
-		  target              an IPv4 address or CIDR, e.g. 192.168.1.10 or 192.168.1.0/24
+		  target              an IPv4 address or CIDR, or one IPv6 address,
+		                      e.g. 192.168.1.10, 192.168.1.0/24 or 2001:db8::1
 		  -p, --ports SPEC    ports to scan, e.g. 22,80,443,8000-8100 (default 1-1024)
 		  -t, --timeout MS    connect timeout in milliseconds (default 500)
 		  -c, --concurrency N probes running at once (default 200)
+		  -r, --rate N        start at most N probes per second (default: no limit)
+		  --no-probe          only connect: send nothing to services, read no banners
 		  --json              print JSON instead of a table
 		  --all               also list closed and filtered ports
 		  -w, --watch         show the recon view: a live pixel-art picture of the scan
@@ -65,6 +68,8 @@ public final class Main
 		String ports = "1-1024";
 		int timeout = 500;
 		int concurrency = 200;
+		int rate = 0;
+		boolean grabBanners = true;
 		boolean json = false;
 		boolean all = false;
 		boolean watch = false;
@@ -78,6 +83,8 @@ public final class Main
 					case "-p", "--ports" -> ports = args[++i];
 					case "-t", "--timeout" -> timeout = toNumber(args[i], args[++i]);
 					case "-c", "--concurrency" -> concurrency = toNumber(args[i], args[++i]);
+					case "-r", "--rate" -> rate = toPositive(args[i], args[++i]);
+					case "--no-probe" -> grabBanners = false;
 					case "--json" -> json = true;
 					case "--all" -> all = true;
 					case "-w", "--watch" -> watch = true;
@@ -89,6 +96,7 @@ public final class Main
 			{
 				throw new IllegalArgumentException("timeout and concurrency must be at least 1");
 			}
+			ScanSettings settings = new ScanSettings(timeout, concurrency, rate, grabBanners);
 			if (watch && json)
 			{
 				throw new IllegalArgumentException("--watch draws a picture, so it cannot be combined with --json");
@@ -99,8 +107,8 @@ public final class Main
 
 			long start = System.nanoTime();
 			List<ScanResult> results = watch
-				? scanWatched(hosts, portList, timeout, concurrency, target)
-				: Scanner.scan(hosts, portList, timeout, concurrency);
+				? scanWatched(hosts, portList, settings, target)
+				: Scanner.scan(hosts, portList, settings, result -> { });
 			long ms = (System.nanoTime() - start) / 1_000_000;
 
 			System.out.print(json ? Report.json(results) : Report.table(results, all));
@@ -135,14 +143,13 @@ public final class Main
 	 *         even if the scan throws or the user presses Ctrl+C
 	 * RETURN: the scan results, sorted
 	 *
-	 * @param hosts       the hosts to scan
-	 * @param ports       the ports to probe
-	 * @param timeout     the probe timeout, in milliseconds
-	 * @param concurrency the most probes at once
-	 * @param target      the target as typed, shown in the view
+	 * @param hosts    the hosts to scan
+	 * @param ports    the ports to probe
+	 * @param settings timeout, concurrency, rate and banner grabbing
+	 * @param target   the target as typed, shown in the view
 	 * @return every result, sorted by host, then port
 	 */
-	private static List<ScanResult> scanWatched(List<String> hosts, List<Integer> ports, int timeout, int concurrency,
+	private static List<ScanResult> scanWatched(List<String> hosts, List<Integer> ports, ScanSettings settings,
 		String target)
 	{
 		ReconView view = new ReconView(hosts, ports, target);
@@ -171,7 +178,7 @@ public final class Main
 
 		try
 		{
-			return Scanner.scan(hosts, ports, timeout, concurrency, view::record);
+			return Scanner.scan(hosts, ports, settings, view::record);
 		}
 		finally
 		{
@@ -189,6 +196,30 @@ public final class Main
 			System.out.flush();
 			Runtime.getRuntime().removeShutdownHook(showCursor);
 		}
+	}
+
+	/**
+	 * WHAT:   Reads a whole number of at least 1, such as the value of --rate.
+	 * WHY:    0 means "no limit" inside the program, but typing "--rate 0" is
+	 *         almost certainly a mistake, so it is refused rather than
+	 *         silently turning the limit off.
+	 * PRE:    option and value are not null
+	 * RETURN: the value as an int, at least 1
+	 * THROWS: IllegalArgumentException if value is not a whole number of at least 1
+	 *
+	 * @param option the option name, used in the error message, e.g. "--rate"
+	 * @param value  the text after the option, e.g. "100"
+	 * @return the number
+	 * @throws IllegalArgumentException if value is not a whole number of at least 1
+	 */
+	private static int toPositive(String option, String value)
+	{
+		int number = toNumber(option, value);
+		if (number < 1)
+		{
+			throw new IllegalArgumentException(option + " must be at least 1, got " + number);
+		}
+		return number;
 	}
 
 	/**

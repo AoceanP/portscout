@@ -66,6 +66,28 @@ public final class PortProbe
 	 */
 	public static ScanResult probe(String host, int port, int timeoutMs)
 	{
+		return probe(host, port, timeoutMs, true);
+	}
+
+	/**
+	 * WHAT:   Like probe(host, port, timeoutMs), optionally without reading a banner.
+	 * WHY:    With grabBanner false nothing is sent to the service: the
+	 *         handshake completes and the socket closes at once. That is the
+	 *         polite choice for fragile services (old printers, PLCs) that
+	 *         misbehave when sent unexpected data, and it is faster. The
+	 *         service is then only guessed from the port number.
+	 * PRE:    the same as probe(host, port, timeoutMs); host may also be an IPv6 literal
+	 * RETURN: the same as probe(host, port, timeoutMs); with grabBanner false the
+	 *         banner is always "" and the service a port-number guess
+	 *
+	 * @param host       the IPv4 or IPv6 address to connect to
+	 * @param port       the TCP port to probe
+	 * @param timeoutMs  how long to wait for the handshake, in milliseconds
+	 * @param grabBanner true to read the service's banner, false to send and read nothing
+	 * @return the port's state, its banner if open and asked for, and how long the probe took
+	 */
+	public static ScanResult probe(String host, int port, int timeoutMs, boolean grabBanner)
+	{
 		long start = System.nanoTime();
 		ScanResult.State state = ScanResult.State.FILTERED;
 		String reply = "";
@@ -74,7 +96,7 @@ public final class PortProbe
 		{
 			socket.connect(new InetSocketAddress(host, port), timeoutMs);
 			state = ScanResult.State.OPEN;
-			reply = grabReply(socket, timeoutMs);
+			reply = grabBanner ? grabReply(socket, timeoutMs) : "";
 		}
 		catch (ConnectException e)
 		{

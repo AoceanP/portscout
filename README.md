@@ -8,7 +8,7 @@ A multithreaded TCP port scanner in Java to understand how tools like nmap work:
 
 ### What
 
-A command-line tool that takes an IPv4 address or subnet (e.g. `192.168.1.0/24`) and a list of ports, tries to connect to each one, and reports which ports are **open**, **closed** or **filtered**, and **what is running** behind each open port: the service, the software and its version (`ssh · OpenSSH 9.6p1`, `http · nginx 1.24.0`).
+A command-line tool that takes an IPv4 address or subnet (e.g. `192.168.1.0/24`), or an IPv6 address, and a list of ports, tries to connect to each one, and reports which ports are **open**, **closed** or **filtered**, and **what is running** behind each open port: the service, the software and its version (`ssh · OpenSSH 9.6p1`, `http · nginx 1.24.0`).
 
 With `--watch` it draws the scan live in the terminal as pixel art: you and the target, probes going out along the wire, a map of the ports filling in, and a card with an icon for every service found.
 
@@ -34,6 +34,10 @@ Doing this by hand is slow and unclear:
 - **Service and version detection** from what came back: the SSH greeting, the HTTP `Server:` header, FTP and mail greetings, the binary MySQL/MariaDB greeting, VNC, Redis and AMQP. When the service says nothing, the usual service for that port is shown as a guess, marked with `?`, because anything can listen on any port.
 - **Java 21 virtual threads, capped by a semaphore,** so probes wait on the network in parallel: 1,024 ports at 200 at a time takes about 1,024 ÷ 200 × 0.5 s ≈ **3 seconds** in the worst case instead of 8 minutes (measured: 93x faster on a silent host, see [Benchmarks](#benchmarks)), without exhausting sockets or flooding the target.
 - **CIDR parsing** to scan a whole subnet in one command, with safety limits (nothing bigger than a /16, at most 1,000,000 probes).
+- **IPv6 targets:** single addresses such as `::1` or `2001:db8::1`, parsed as literals (never a DNS lookup) and written the standard short way (RFC 5952). IPv6 subnets are refused: even the usual smallest one, a /64, holds about 18 quintillion addresses, so sweeping it would never finish.
+- **Polite scanning on request:**
+  - `--rate N` starts at most N probes per second. Concurrency only limits how many probes are *open* at once; against a host that answers instantly, 200 at once can still mean thousands of connection attempts per second, enough to upset a small device.
+  - `--no-probe` only completes the handshake and closes, sending nothing to the service. Use it for fragile devices (old printers, industrial controllers) that misbehave when sent unexpected data. Services are then only guessed from the port number.
 
 ### Why I built it
 
@@ -47,7 +51,9 @@ nmap already does this well. portscout exists to understand **how it works under
 | Drawing in a terminal: half blocks, 24-bit colour, redrawing in place | `ReconView` |
 | Firewall behaviour (drop vs refuse) | FILTERED vs CLOSED |
 | Concurrency in Java 21 | `Scanner`: virtual threads capped by a semaphore |
-| Testing and documentation | 70 JUnit tests, Javadoc, UML, flowchart and the edge cases below |
+| Rate limiting without bursts | `Pacer`: evenly spaced starts, no catch-up after a pause |
+| IPv6 address text (RFC 5952) | `TargetParser.parseIpv6`, `TargetParser.compress` |
+| Testing and documentation | 82 JUnit tests, Javadoc, UML, flowchart and the edge cases below |
 
 ### Part of a project series
 
@@ -115,10 +121,12 @@ portscout <target> [options]
 
 | Option | Meaning | Default |
 |---|---|---|
-| `target` | one IPv4 address, or a CIDR block up to /16, e.g. `192.168.1.0/24` | required |
+| `target` | one IPv4 address, a CIDR block up to /16 (e.g. `192.168.1.0/24`), or one IPv6 address (e.g. `::1`) | required |
 | `-p, --ports` | ports and ranges, e.g. `22,80,443,8000-8100` | `1-1024` |
 | `-t, --timeout` | connect and read timeout in ms | `500` |
 | `-c, --concurrency` | probes running at once | `200` |
+| `-r, --rate` | start at most N probes per second | no limit |
+| `--no-probe` | only connect: send nothing to services, read no banners | off |
 | `--json` | JSON output, including closed and filtered ports | off |
 | `--all` | also list closed and filtered ports in the table | off |
 | `-w, --watch` | show the recon view while scanning, then the table | off |
@@ -161,13 +169,16 @@ portscout 127.0.0.1 --watch
 
 The full table is printed below the view when the scan ends. The view needs a terminal with 24-bit colour and at least 80 x 28 characters: Windows Terminal (the default on Windows 11), and any common macOS or Linux terminal. Every character it draws exists in code page 437, the Windows console default.
 
-**Scanning many ports of Docker containers on Windows:** Docker Desktop forwards each container port through one process, which slows down when hundreds of connections arrive at once. A web server in a container can then miss the banner timeout and show only `http?`. Scanning just those ports, or using `-c 50`, gives it time to answer.
+**Scanning many ports of Docker containers on Windows:** Docker Desktop forwards each container port through one process, which slows down when hundreds of connections arrive at once. A web server in a container can then miss the banner timeout and show only `http?`. Scanning just those ports, or using `-c 50` or `-r 100`, gives it time to answer.
+
+**A slow scan and wiresight:** wiresight raises its alarm at 20 different ports from one address within 10 seconds. A scan at `-r 1` stays under that, which is exactly why detectors also need long windows. [logonwatch](https://github.com/AoceanP/logonwatch) has slow-attack rules for logons; for port scans, wiresight does not have one yet.
 
 ## How it works
 
 - **TCP connect scan:** open = handshake completes, closed = RST, filtered = no reply before the timeout.
 - **Banner grabbing:** read the greeting that SSH, FTP and SMTP send first; for silent services send an HTTP `HEAD` and read the status line. Only the first printable line is kept, because banners are untrusted remote data.
 - **Concurrency:** a semaphore permit is taken before each virtual thread starts, so at most `-c` probes exist at once and the scan never exhausts sockets.
+- **Rate:** before each probe starts, `Pacer` waits until one interval (1 s ÷ N) has passed since the previous start. After a pause the next probe goes at once but the one after still waits, so the rate is never exceeded in a burst.
 - **Safety limits:** blocks bigger than a /16 and scans over 1,000,000 probes are refused.
 
 ## Privacy and data
@@ -234,6 +245,8 @@ Past 50 there is no gain: the scan can never finish faster than its slowest prob
 - [ ] Stretch: UDP probes for DNS (53) and NTP (123)
 - [x] Identify the service, software and version behind each open port
 - [x] Recon view: a live pixel-art picture of the scan
+- [x] Polite scanning: `--rate` and `--no-probe`
+- [x] IPv6 targets (single addresses)
 - [ ] Stretch: map versions to known vulnerabilities and flag outdated ones
 
 ## License
@@ -267,6 +280,10 @@ Every case below is covered by a test (in [`EdgeCaseTest`](src/test/java/portsco
 | `010.0.0.008` | `10.0.0.8` | some C libraries read `010` as octal 8, a known way to slip past address filters; portscout always reads decimal |
 | `  10.0.0.1  ` | `10.0.0.1` | surrounding spaces from copy and paste are trimmed |
 | `0.0.0.0`, `255.255.255.255` | accepted | valid IPv4 text; what a connect does is up to the operating system |
+| `2001:DB8:0:0:0:0:0:1`, `[::1]` | `2001:db8::1`, `::1` | IPv6 is written the short standard way, so one host is always written one way (`PoliteScanTest`) |
+| `::ffff:192.0.2.1` | `192.0.2.1` | an IPv4-mapped address is really IPv4 (`PoliteScanTest`) |
+| `2001:db8::/64` | refused | a /64 holds about 18 quintillion addresses (`PoliteScanTest`) |
+| `fe80::1%eth0`, `192.0.2.1:80`, `example.com:80` | refused | only plain address literals, so nothing can turn into a DNS lookup (`PoliteScanTest`) |
 | `10.+1.0.1`, `10..0.1`, `256.1.1.1`, `example` | refused | `Integer.parseInt` accepts `+1`, so octets are checked as digits only (`TargetParserTest`) |
 
 ### Probes and banners
@@ -283,6 +300,10 @@ Every case below is covered by a test (in [`EdgeCaseTest`](src/test/java/portsco
 | Banner with `"` or `\` | escaped in JSON | a server cannot break or inject into the JSON output (`ReportTest`) |
 | Nothing listening | CLOSED | the host answers the SYN with a RST (`PortProbeTest`) |
 | No reply at all (`192.0.2.1`) | FILTERED | a reserved, never-routed address behaves like a firewall that drops packets (`PortProbeTest`) |
+| `--no-probe` on a silent open port | OPEN, nothing sent | the test server counts the bytes it received: 0, against a `HEAD` request without the option (`PoliteScanTest`) |
+| `--rate 100`, 20 instantly closed ports | at least 190 ms | 20 evenly spaced starts, even though every answer is instant (`PoliteScanTest`) |
+| A pause in the middle of a rate-limited scan | no burst afterwards | the pacer books from now, not from the missed slots (`PoliteScanTest`) |
+| An open port on `::1` | OPEN with banner | end to end over IPv6; skipped on a machine without IPv6 (`PoliteScanTest`) |
 
 ### Scanner and output
 
@@ -302,6 +323,7 @@ Every case below is covered by a test (in [`EdgeCaseTest`](src/test/java/portsco
 | `portscout` or `portscout -h` | prints usage |
 | `portscout 127.0.0.1 -p` | `error: -p needs a value`, exit code 2 |
 | `portscout 127.0.0.1 -t 0` | `error: timeout and concurrency must be at least 1`, exit code 2 |
+| `portscout 127.0.0.1 --rate 0` | `error: --rate must be at least 1, got 0`, exit code 2 |
 | `portscout 127.0.0.1 -t abc` | `error: -t needs a whole number, got 'abc'`, exit code 2 |
 | `portscout 10.0.0.0/8` | `error: /8 is too big to scan; use /16 or smaller`, exit code 2 |
 | `portscout 127.0.0.1 --bogus` | `error: unknown option --bogus`, exit code 2 |
