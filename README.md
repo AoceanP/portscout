@@ -171,7 +171,7 @@ The full table is printed below the view when the scan ends. The view needs a te
 
 **Scanning many ports of Docker containers on Windows:** Docker Desktop forwards each container port through one process, which slows down when hundreds of connections arrive at once. A web server in a container can then miss the banner timeout and show only `http?`. Scanning just those ports, or using `-c 50` or `-r 100`, gives it time to answer.
 
-**A slow scan and wiresight:** wiresight raises its alarm at 20 different ports from one address within 10 seconds. A scan at `-r 1` stays under that, which is exactly why detectors also need long windows. [logonwatch](https://github.com/AoceanP/logonwatch) has slow-attack rules for logons; for port scans, wiresight does not have one yet.
+**A slow scan and wiresight:** wiresight's fast alarm fires at 20 different ports from one address within 10 seconds, and a scan at `-r 1` stays under it. That is why wiresight also has a 15-minute window, like the slow-attack rules in [logonwatch](https://github.com/AoceanP/logonwatch): run against `-r 1`, it reports `SLOW PORT SCAN ... 100 ports in 96 s` instead. A rate limit makes a scan polite, not invisible.
 
 ## How it works
 
