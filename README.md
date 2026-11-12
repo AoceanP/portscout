@@ -63,6 +63,7 @@ Each project looks at the same network from a different side:
 |---|---|---|---|
 | **portscout** (this one) | Java 21 | the attacker's view | What ports are open, and what is running behind them? |
 | [**wiresight**](https://github.com/AoceanP/wiresight) | C++20 | the network's view | What is actually on the wire? |
+| [**tlsaudit**](https://github.com/AoceanP/tlsaudit) | Java 21 | the encryption's view | Can the connection itself be trusted? |
 | [**logonwatch**](https://github.com/AoceanP/logonwatch) | C# / .NET 10 | the defender's view | Is someone trying to break in, and did they get in? |
 | [**tracekeep**](https://github.com/AoceanP/tracekeep) | Python | the evidence's view | Can the logs still be trusted afterwards? |
 
